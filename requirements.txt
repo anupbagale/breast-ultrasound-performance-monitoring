@@ -1,0 +1,16 @@
+# Google Colab already provides most of these; the notebook installs the rest in cell 1.
+torch
+torchvision
+timm
+open_clip_torch
+transformers        # only needed for the optional MedSigLIP model
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+pillow
+imagehash
+kagglehub
+openpyxl
+requests
