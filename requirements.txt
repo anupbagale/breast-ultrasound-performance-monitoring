@@ -1,5 +1,6 @@
-# Google Colab already provides most of these; the notebook installs the rest in cell 1.
-torch
+# Versions used for the reported results (Google Colab, NVIDIA T4 GPU).
+# Colab already provides most of these; the notebook installs the rest in cell 1.
+torch==2.11.0
 torchvision
 timm
 open_clip_torch
@@ -7,7 +8,7 @@ transformers        # only needed for the optional MedSigLIP model
 numpy
 pandas
 scipy
-scikit-learn
+scikit-learn==1.6.1
 matplotlib
 pillow
 imagehash
