@@ -55,7 +55,7 @@ CONFIG = dict(
     target_sens=0.90,       # operating point fixed on the source calibration set
     prev_grid=[0.1, 0.2, 0.3, 0.5, 0.7],
     reps=50, n_sub=100,     # prevalence stress test: 50 resamples of 100 cases
-    models=["resnet50", "dinov2_b14", "clip_b16", "biomedclip"],  # add "medsiglip" if you have HF access
+    models=["resnet50", "dinov2_b14", "clip_b16", "biomedclip"],
     # few-label extension: K labelled target cases (K=0 is the label-free method)
     few_k=[0, 5, 10, 20, 40, 80],
     prior_sd_a=0.5, prior_sd_b=1.0,   # base scale of the label-free prior (rescaled automatically by empirical Bayes)
@@ -763,12 +763,6 @@ def build_encoder(key, dev):
         m, _, pre = open_clip.create_model_and_transforms(arch, pretrained=pt)
         m = m.eval().to(dev)
         return m.encode_image, pre
-    if key == "medsiglip":  # gated: accept licence on huggingface.co/google/medsiglip-448, then login
-        from transformers import AutoImageProcessor, AutoModel
-        m = AutoModel.from_pretrained("google/medsiglip-448").eval().to(dev)
-        proc = AutoImageProcessor.from_pretrained("google/medsiglip-448")
-        return (lambda x: m.get_image_features(pixel_values=x)), \
-               (lambda im: proc(images=im, return_tensors="pt")["pixel_values"][0])
     raise KeyError(key)
 
 
