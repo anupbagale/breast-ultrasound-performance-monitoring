@@ -37,10 +37,10 @@ else:
     DRIVE_DIR = Path("bus_data")
 DRIVE_DIR.mkdir(parents=True, exist_ok=True)
 # Storage layout
-#   Drive (permanent):  bus_data/raw/      downloaded zips  -> downloaded only ONCE, ever
+#   Drive (permanent):  bus_data/raw/      downloaded zips
 #                       bus_data/work/     manifest + embeddings (checkpoints)
 #                       bus_data/results/  per-model results (checkpoints), tables, figures
-#   Colab disk (fast, wiped when the session ends): /content/data  <- zips are unpacked here each session
+#   Colab disk (temporary): /content/data  <- zips are unpacked here each session
 RAW = DRIVE_DIR / "raw"
 DATA = Path("/content/data") if Path("/content").exists() else Path("data")
 WORK = DRIVE_DIR / "work"
@@ -64,14 +64,13 @@ CONFIG = dict(
     reps_ext=50,
     # aggregate cancer rate known from hospital records, with this much error (absolute)
     known_prev_err=[0.05, 0.10],
-    # untouched confirmation site: method design is frozen on the other sites, this one is evaluated once
+    # held-out confirmation site (never used for training)
     holdout="WHU",
     seed=0,
 )
 
 # %% [cell 2] ---------------------------------------------------------------- download data
-# CHECKPOINT: every dataset is stored as a zip in Drive (bus_data/raw/). If the zip is already
-# there it is NOT downloaded again; it is only unpacked to the fast local disk.
+# Each dataset is stored as a zip in Drive (bus_data/raw/) and downloaded only if missing.
 import shutil
 import requests
 
@@ -92,7 +91,7 @@ def wget(url: str, out: Path) -> bool:
 
 
 def extract_nested(folder: Path):
-    """Some datasets wrap the author's own zips inside the archive: unpack those too."""
+    """Unpack nested zip files."""
     for _ in range(3):
         inner = [z for z in folder.rglob("*.zip") if not (z.parent / z.stem).exists()]
         if not inner:
@@ -106,7 +105,7 @@ def extract_nested(folder: Path):
 
 
 def unpack(z: Path, dest: Path):
-    """Drive zip -> local disk (skipped if already unpacked in this session)."""
+    """Unpack a zip from Drive to local disk."""
     if dest.exists() and any(dest.rglob("*.*")):
         return
     print("unpacking", z.name, "->", dest)
@@ -116,7 +115,7 @@ def unpack(z: Path, dest: Path):
 
 
 def mendeley_fetch(ds_id: str, version: int, z: Path) -> bool:
-    """Mendeley Data: 'Download All' archive first, public API file-by-file as fallback."""
+    """Download a Mendeley Data dataset."""
     dl = z.with_name(z.stem + ".download.zip")  # never overwrite/delete a file the user placed in raw/
     if wget(f"https://prod-dcd-datasets-cache-zipfiles.s3.eu-west-1.amazonaws.com/{ds_id}-{version}.zip", dl) and ok_zip(dl):
         os.replace(dl, z)
@@ -200,10 +199,10 @@ for name, ds_id in (("UCLM", "7fvgj4jsp7"), ("WHU", "k6cpmwybk3")):
         mendeley_fetch(ds_id, 3, z)
     status[name] = ok_zip(z)
     if not status[name]:
-        print(f"{name}: AUTO-DOWNLOAD FAILED -> click 'Download All' on https://data.mendeley.com/datasets/{ds_id}/3,"
+        print(f"{name}: download failed; click 'Download All' on https://data.mendeley.com/datasets/{ds_id}/3,"
               f" rename the file to {name}.zip and put it in {RAW}")
 
-# unpack everything that is in Drive to the local disk
+# unpack datasets
 for name, ok in status.items():
     if ok:
         unpack(RAW / f"{name}.zip", DATA / name)
@@ -225,7 +224,7 @@ COLUMNS = ["uid", "dataset", "image_path", "mask_paths", "label", "patient_id", 
 
 
 def inspect(root, n=4):
-    """print folder tree - use this if a loader complains"""
+    """Print the folder tree."""
     root = Path(root)
     seen = {}
     for p in sorted(root.rglob("*")):
@@ -302,7 +301,7 @@ def load_busbra(root):
 
 def load_uclm(root):
     """images/XXXX_000.png + masks/XXXX_000.png; RGB mask red=malignant, green=benign, black=normal.
-    Patient = filename prefix before '_'. Only 38 patients -> patient-level splits are essential."""
+    Patient = filename prefix before '_'."""
     idir, mdir = _find_dir(root, "images"), _find_dir(root, "masks")
     if idir is None or mdir is None:
         raise FileNotFoundError("BUS-UCLM: expected 'images' and 'masks' folders")
@@ -348,7 +347,7 @@ MASK_HINT = re.compile(r"(mask|label|annot|gt|seg)", re.I)
 
 def load_generic(root, name):
     """.../<benign|malignant>/... ; mask = file/folder containing mask|label|gt, matched by stem.
-    CHECK the printed counts against the dataset description."""
+    """
     root = Path(root)
     images, masks = [], {}
     for p in _all_images(root):
@@ -421,8 +420,7 @@ def phash64(path):
 
 
 def assign_groups(df, max_dist=6):
-    """Same patient OR near-identical image (pHash) -> same group. Splits are made by group,
-    so copies of one lesion can never be in both train and test (BUSI has many duplicates)."""
+    """Same patient or near-identical image (pHash) -> same group; splits are made by group."""
     df = df.reset_index(drop=True).copy()
     print(f"hashing {len(df)} images ...")
     H = np.array([phash64(p) for p in df.image_path], dtype=np.uint64)
@@ -489,7 +487,7 @@ class Probe:
 
 def build_probe(X_tr, y_tr, g_tr, X_cal, y_cal, target_sens=0.90, Cs=(1e-3, 1e-2, 1e-1, 1.0)):
     """1) logistic regression (C by group CV)  2) temperature scaling on 'cal'
-       3) threshold on 'cal' giving >= target_sens sensitivity; then FROZEN like a deployed device"""
+       3) threshold on 'cal' giving >= target_sens sensitivity (then fixed)"""
     cv = GroupKFold(int(min(5, len(np.unique(g_tr)))))
     best = min(Cs, key=lambda C: log_loss(y_tr, np.clip(cross_val_predict(
         make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=5000)), X_tr, y_tr,
@@ -647,8 +645,8 @@ def est_labels_only(p_l, y_l, t, a=0.5):
 
 
 def est_ppi(p_u, q_u, p_l, q_l, y_l, t):
-    """Prediction-powered inference (Angelopoulos et al., Science 2023): label-free predictions on the
-    unlabelled pool + a bias correction measured on the K labelled cases. Unbiased for each expectation."""
+    """Prediction-powered inference (Angelopoulos et al., 2023): label-free predictions on the
+    unlabelled pool plus a bias correction from the K labelled cases."""
     def parts(p, yy):
         yh = (p >= t).astype(float)
         return np.stack([yy, yy * yh, (1 - yy) * (1 - yh)], 1)  # E[y], E[TP], E[TN]
@@ -671,10 +669,8 @@ def _map_fit(z_l, y_l, b0, sd_a, sd_b):
 
 def recalibrate(z_l, y_l, b0, sd_a, sd_b, scales=(0.25, 0.5, 1, 2, 4, 16)):
     """Empirical-Bayes recalibration. Model: P(y=1|x) = sigmoid(a*z + b), prior a ~ N(1, (c*sd_a)^2),
-    b ~ N(b0, (c*sd_b)^2), centred on the LABEL-FREE solution (b0 = estimated prevalence shift).
-    The prior scale c is chosen by maximising the Laplace-approximated marginal likelihood (evidence)
-    of the K labels (MacKay 1992): if the labels agree with the label-free estimate the prior stays tight,
-    if they contradict it the prior relaxes. K=0 returns exactly the label-free solution (a=1, b=b0)."""
+    b ~ N(b0, (c*sd_b)^2). The prior scale c is chosen by maximising the Laplace-approximated
+    evidence of the K labels (MacKay 1992). K=0 returns a=1, b=b0."""
     if len(y_l) == 0:
         return 1.0, b0
     X = np.stack([z_l, np.ones_like(z_l)], 1)
@@ -704,9 +700,7 @@ def est_recal(p_all, lab_idx, y_l, t, b0, sd_a, sd_b):
 
 def few_label_all(p_s, y_s, p_t, lab_idx, y_l, t, sd_a=0.5, sd_b=1.0):
     """All few-label estimators for one draw of K labelled cases (lab_idx indexes p_t).
-    Design decision (made on the development sites, confirmed on the held-out site): the Bayesian prior
-    is centred on CBPE (a=1, b=0), the best label-free estimator; centring on the EM prevalence estimate
-    is kept as an ablation."""
+    Proposed: prior centred on CBPE (b0=0). Ablation: prior centred on the EM prevalence estimate."""
     pi_s = float(np.mean(y_s))
     unl = np.setdiff1d(np.arange(len(p_t)), lab_idx)
     b_em = float(_logit(np.array(prior_em(p_t, pi_s))) - _logit(np.array(pi_s)))
@@ -722,13 +716,11 @@ def few_label_all(p_s, y_s, p_t, lab_idx, y_l, t, sd_a=0.5, sd_b=1.0):
 print("library loaded")
 
 # %% [cell 4] ---------------------------------------------------------------- build manifest
-# CHECKPOINT: the manifest (with duplicate groups and splits) is saved to Drive and reused, as long as
-# the same datasets are present. Adding a dataset later triggers a rebuild automatically.
+# The manifest (duplicate groups and splits) is cached in Drive.
 available = sorted(k for k, v in DATASET_PATHS.items() if v)
 mf = WORK / "manifest.csv"
 if mf.exists() and sorted(pd.read_csv(mf, usecols=["dataset"]).dataset.unique()) == available:
     manifest = pd.read_csv(mf, keep_default_na=False)
-    # paths point to /content/data, which is rebuilt identically each session
     print("manifest checkpoint found ->", len(manifest), "images; skipping rebuild")
 else:
     frames = []
@@ -797,8 +789,7 @@ dev = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", dev)
 EMB = WORK / f"emb_{CONFIG['image_mode']}"
 EMB.mkdir(exist_ok=True)
-# CHECKPOINT: one file per model in Drive. Only images that are not embedded yet are processed
-# (e.g. after adding a new dataset), so an interrupted run resumes where it stopped.
+# Embeddings are cached in Drive, one file per model.
 for key in CONFIG["models"]:
     f = EMB / f"{key}.npz"
     old_uid, old_X = (np.load(f, allow_pickle=True)["uid"], np.load(f)["X"]) if f.exists() else (np.array([]), None)
@@ -825,14 +816,13 @@ for key in CONFIG["models"]:
         torch.cuda.empty_cache()
 
 # %% [cell 6] ---------------------------------------------------------------- main experiment
-# For each model x scenario: fit on source, freeze threshold, deploy on target WITHOUT labels,
-# estimate metrics with every method, compare with true metrics (labels only used for scoring).
-#   in-domain : source test split (no shift - sanity check)
+# For each model and scenario: fit on source, freeze the threshold, deploy on the target without labels,
+# estimate metrics with each method and compare with the true metrics.
+#   in-domain : source test split (no shift)
 #   single    : train on 1 dataset -> deploy to each other dataset
 #   lodo      : train on all-but-one -> deploy to the held-out dataset
 # + prevalence stress test: target resampled to fixed malignancy prevalences.
-# CHECKPOINTS (Drive): classifier outputs per model (work/preds/) and results per model (results/runs/).
-# Both are tied to a fingerprint of the manifest + settings, so stale results are never reused.
+# Predictions (work/preds/) and results (results/runs/) are cached in Drive per model.
 import time, hashlib, json, zlib, pickle
 
 manifest = pd.read_csv(WORK / "manifest.csv", keep_default_na=False)
@@ -861,7 +851,7 @@ def get_preds(model):
     X = pd.DataFrame(z["X"], index=z["uid"]).loc[manifest.uid].values
     y, g = manifest.label.values, manifest.group_id.values
     out = []
-    # the held-out site is NEVER used for training; it is only ever a deployment target
+    # the held-out site is used only as a deployment target
     D = DEV_SITES
     sources = [(d,) for d in D] + ([tuple(x for x in D if x != d) for d in D] if len(D) > 2 else [])
     if HOLD:
@@ -925,12 +915,9 @@ res.to_csv(RESULTS / "raw_results.csv.gz", index=False)
 print(len(res), "rows saved")
 
 # %% [cell 7] ---------------------------------------------------------------- extensions: few labels + sample size
-# (A) FEW LABELS: the hospital labels K randomly chosen cases (K in CONFIG["few_k"]). How accurately can
-#     each method then estimate the true performance at that hospital?
-# (B) SAMPLE SIZE: the hospital has only N unlabelled images. How many are needed for a reliable
-#     label-free estimate?
-# Ground truth in both = metrics on the hospital's FULL dataset. Run cell 6 first in the same session.
-# CHECKPOINT: one file per model and extension in results/runs_fewlabel/ and results/runs_samplesize/.
+# (A) Few labels: K randomly selected labelled target cases (CONFIG["few_k"]).
+# (B) Sample size: N unlabelled target images (CONFIG["n_unlab"]).
+# Ground truth: metrics on the full target dataset. Run cell 6 first in the same session.
 FL_DIR, SS_DIR = RESULTS / "runs_fewlabel", RESULTS / "runs_samplesize"
 FL_DIR.mkdir(exist_ok=True)
 SS_DIR.mkdir(exist_ok=True)
@@ -987,9 +974,8 @@ samp.to_csv(RESULTS / "raw_samplesize.csv.gz", index=False)
 print(len(fewlab), "few-label rows,", len(samp), "sample-size rows saved")
 
 # %% [cell 8] ---------------------------------------------------------------- tables & figures
-# Two separate reports:
-#   DEVELOPMENT  = deployments to the development sites (all method design decisions were made here)
-#   CONFIRMATION = deployments to the untouched held-out site (CONFIG["holdout"]), evaluated once
+# Development report: deployments to the development sites.
+# Confirmation report: deployments to the held-out site (CONFIG["holdout"]).
 import re
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, wilcoxon
@@ -1025,8 +1011,8 @@ def holm(p):
 
 
 def mae_ci(d, B=1000):
-    """MAE (pp) with a 95% CI from a CLUSTER bootstrap over deployment pairs (source -> target):
-    rows from the same pair (different models / repeats) are not independent, so we resample pairs."""
+    """MAE (pp) with a 95% CI from a cluster bootstrap over deployment pairs (source -> target):
+    deployment pairs are resampled."""
     per_pair = d.dropna(subset=["abs_err"]).groupby(["scenario", "source", "target"]).abs_err.mean().values * 100
     if not len(per_pair):
         return "n/a"
@@ -1102,7 +1088,7 @@ print(f"development pairs: {shift.groupby(['scenario', 'source', 'target']).ngro
 
 # ============================================================== DEVELOPMENT REPORT
 print("\n" + "=" * 30 + " DEVELOPMENT SITES " + "=" * 30)
-# T1: how much does performance actually change at a new site?
+# T1: source vs target performance
 t1 = nat[nat.method == "source"].pivot_table(index=["role", "model", "scenario", "source", "target"],
                                              columns="metric", values=["est", "true"])
 t1.columns = [("source_" if a == "est" else "target_") + m for a, m in t1.columns]
@@ -1111,7 +1097,7 @@ t1m = t1.reset_index().query("scenario != 'in-domain'").groupby("role")[
     [f"{w}_{m}" for m in ("sens", "spec", "auroc") for w in ("source", "target")]].mean()
 show("T1 mean source vs target-site performance", t1m, index=True)
 
-# T2: label-free estimation error, MAE in percentage points with 95% cluster-bootstrap CI
+# T2: label-free estimation error (MAE, pp, 95% CI)
 t2 = shift.groupby(["method", "metric"])[["scenario", "source", "target", "abs_err"]].apply(mae_ci).unstack()
 t2 = t2.reindex([m for m in ORDER if m in t2.index])[COLS_T]
 t2.to_csv(RESULTS / "T2_estimation_error.csv")
@@ -1120,7 +1106,7 @@ t2c = paired_tests(shift, "CBPE", ["source", "ATC", "DoC", "PA-CBPE-EM", "PA-CBP
 t2c.round(4).to_csv(RESULTS / "T2c_significance_labelfree.csv", index=False)
 show("T2c CBPE (best label-free) vs others", t2c)
 
-# T3: failure detection - does the estimate raise an alarm when true sensitivity < 0.85?
+# T3: failure detection (true sensitivity < 0.85)
 s_ = shift[shift.metric == "sens"].dropna(subset=["est", "true"]).assign(fail=lambda d: d.true < FAIL_SENS)
 t3 = []
 for meth, d in s_.groupby("method"):
@@ -1132,7 +1118,7 @@ t3 = pd.DataFrame(t3).set_index("method").reindex([m for m in ORDER if m != "sou
 t3.round(3).to_csv(RESULTS / "T3_failure_detection.csv")
 show(f"T3 detecting sensitivity < {FAIL_SENS}", t3, index=True)
 
-# T4: label-free model selection - pick the best foundation model for a new site
+# T4: label-free model selection
 b_ = shift[shift.metric == "bacc"].dropna(subset=["est", "true"])
 t4 = []
 for meth in ORDER:
@@ -1147,7 +1133,7 @@ t4 = pd.DataFrame(t4).set_index("method") if t4 else pd.DataFrame()
 t4.round(3).to_csv(RESULTS / "T4_model_selection.csv")
 show("T4 model selection (balanced accuracy)", t4, index=True)
 
-# T5 + F2: controlled prevalence shift; T5b: is a known (approximate) cancer rate better than CBPE?
+# T5, F2: controlled prevalence shift; T5b: known prevalence vs CBPE
 if len(pv):
     t5 = pv.groupby(["metric", "method", "prev"]).abs_err.mean().mul(100).rename("MAE_pp").reset_index()
     t5.round(2).to_csv(RESULTS / "T5_prevalence_stress.csv", index=False)
@@ -1155,7 +1141,7 @@ if len(pv):
         index=["metric", "method"], columns="prev", values="MAE_pp"), index=True)
     t5b = paired_tests(pv, "CBPE", ["PA-CBPE-known(exact)", "PA-CBPE-known(±5)", "PA-CBPE-known(±10)"], MAIN, by="prev")
     t5b.round(4).to_csv(RESULTS / "T5b_known_prevalence_significance.csv", index=False)
-    show("T5b CBPE vs prevalence-known variants, per target prevalence ('baseline' winner = known prevalence better)", t5b)
+    show("T5b CBPE vs known-prevalence variants per target prevalence", t5b)
     fig, axs = plt.subplots(1, 4, figsize=(15, 3.4))
     for ax, m in zip(axs, MAIN):
         for meth in ORDER:
@@ -1254,9 +1240,9 @@ print("\nall tables/figures saved in", RESULTS)
 
 # %% [cell 9] ---------------------------------------------------------------- supplementary analyses
 # S1  stricter pair-level tests on the held-out site + pooled analysis over all sites
-# S2  does the proposed method win for EVERY foundation model?
-# S3  which target sites are hardest?
-# S4  failure detection with the +/- prevalence-error variants shown separately (fixes T3 counts)
+# S2  per foundation model
+# S3  per target site
+# S4  failure detection, each prevalence-error direction separately
 from scipy.stats import binomtest
 
 fl = tidy(pd.read_csv(RESULTS / "raw_fewlabel.csv.gz"))
@@ -1279,10 +1265,10 @@ for (K, m), d in fl[fl.role == "confirmation"].groupby(["K", "metric"]):
                          sign_test_p=binomtest(wins, len(x)).pvalue if len(x) else np.nan))
 s1a = pd.DataFrame(rows)
 s1a.round(4).to_csv(RESULTS / "S1a_confirmation_pairlevel.csv", index=False)
-show(f"S1a [{HOLD}] pair-level: in how many of the held-out deployment pairs does the proposed method win? "
+show(f"S1a [{HOLD}] pair-level: number of held-out deployment pairs won by the proposed method "
      "(descriptive; with 9 pairs the smallest possible two-sided p is 0.004)", s1a)
 
-# ---------- S1b: ALL sites pooled (development + held-out), deployment pair = unit, Holm-corrected
+# ---------- S1b: all sites pooled (development + held-out), deployment pair = unit, Holm-corrected
 s1b = paired_tests(fl, PROP, OTHERS, MAIN, by="K")
 s1b.round(4).to_csv(RESULTS / "S1b_allsites_pairlevel_significance.csv", index=False)
 show("S1b all sites pooled, pair-level Wilcoxon (Holm-corrected)", s1b)
@@ -1297,8 +1283,8 @@ for (model, role, K, m), d in fl[fl.K.isin([10, 20]) & fl.metric.isin(MAIN)].gro
                      proposed_is_best=bool(mae[PROP] <= mae.min() + 1e-12)))
 s2 = pd.DataFrame(rows)
 s2.round(3).to_csv(RESULTS / "S2_per_model.csv", index=False)
-show("S2 per foundation model (K = 10, 20): is the proposed method the most accurate?", s2)
-print("\nproposed is best in", int(s2.proposed_is_best.sum()), "of", len(s2), "model x site-group x K x metric cells")
+show("S2 per foundation model (K = 10, 20)", s2)
+print("\nproposed is best in", int(s2.proposed_is_best.sum()), "of", len(s2), "settings")
 
 # ---------- S3: per target site, K = 20
 s3 = (fl[(fl.K == 20) & fl.metric.isin(MAIN)].groupby(["target", "metric", "method"]).abs_err.mean().mul(100)
@@ -1321,5 +1307,5 @@ for (role, meth), d in sv.groupby(["role", "method"]):
                      alarm_sens=(al & fail).sum() / fail.sum(), alarm_spec=(~al & ~fail).sum() / (~fail).sum()))
 s4 = pd.DataFrame(rows)
 s4.round(3).to_csv(RESULTS / "S4_failure_detection.csv", index=False)
-show(f"S4 detecting sensitivity < {FAIL_SENS} (replaces T3; each +/- variant separately)", s4)
+show(f"S4 detecting sensitivity < {FAIL_SENS} (each prevalence-error direction separately)", s4)
 print("\nsupplementary tables saved in", RESULTS)
