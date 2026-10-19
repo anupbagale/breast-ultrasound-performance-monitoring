@@ -1,5 +1,7 @@
 # Label-Efficient Performance Monitoring of Breast Ultrasound Classifiers
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/anupbagale/breast-ultrasound-performance-monitoring/blob/main/notebooks/breast_ultrasound_performance_monitoring.ipynb)
+
 When a breast ultrasound classifier is moved to a new hospital, its accuracy can drop because of
 different scanners, operators and patient populations. Measuring this drop normally requires many
 biopsy-confirmed labels, which are costly and slow to collect, especially in low-resource settings.
