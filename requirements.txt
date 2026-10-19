@@ -4,7 +4,6 @@ torch==2.11.0
 torchvision
 timm
 open_clip_torch
-transformers        # only needed for the optional MedSigLIP model
 numpy
 pandas
 scipy

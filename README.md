@@ -56,7 +56,6 @@ Images that show only normal breast tissue are excluded.
 | `dinov2_b14` | DINOv2 ViT-B/14 | Natural images, self-supervised |
 | `clip_b16` | CLIP ViT-B/16 | Image–text pairs |
 | `biomedclip` | BiomedCLIP | Biomedical image–text pairs |
-| `medsiglip` *(optional, not used by default)* | MedSigLIP-448 | Medical images (requires accepting the licence on Hugging Face and an `HF_TOKEN`) |
 
 All models are used frozen; no fine-tuning is performed.
 
