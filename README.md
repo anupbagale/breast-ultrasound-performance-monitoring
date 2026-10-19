@@ -25,7 +25,7 @@ The pipeline runs end to end on a free Google Colab GPU.
 | Leakage control | Near-duplicate images are detected with perceptual hashing; images from the same patient or near-duplicates are grouped, and all splits are made at the group level (60% train, 20% calibration, 20% test). |
 | Feature extraction | Each lesion is cropped (15% margin) and encoded with frozen pre-trained models. |
 | Classifier | Logistic regression on the embeddings, temperature scaling for calibration, and a decision threshold frozen at 90% source sensitivity. |
-| Deployment | Single-source and leave-one-site-out deployments across sites; one site (BUSI-WHU) is held out and used only for final confirmation. |
+| Deployment | Development: 12 single-source and 4 leave-one-site-out deployments between four sites. Confirmation: one site (BUSI-WHU) is held out and receives 4 single-source, 4 three-site and 1 all-site deployments. |
 | Estimation | Label-free, prevalence-informed and few-label estimators are compared against the true metrics at each target site. |
 | Statistics | Cluster-bootstrap confidence intervals, Wilcoxon signed-rank tests with Holm correction, and sign tests. |
 
@@ -56,7 +56,7 @@ Images that show only normal breast tissue are excluded.
 | `dinov2_b14` | DINOv2 ViT-B/14 | Natural images, self-supervised |
 | `clip_b16` | CLIP ViT-B/16 | Image–text pairs |
 | `biomedclip` | BiomedCLIP | Biomedical image–text pairs |
-| `medsiglip` *(optional)* | MedSigLIP-448 | Medical images (requires accepting the licence on Hugging Face and an `HF_TOKEN`) |
+| `medsiglip` *(optional, not used by default)* | MedSigLIP-448 | Medical images (requires accepting the licence on Hugging Face and an `HF_TOKEN`) |
 
 All models are used frozen; no fine-tuning is performed.
 
@@ -74,13 +74,12 @@ strength is chosen by evidence maximisation (it reduces to CBPE when K = 0).
 
 ## How to run
 
-1. Open `notebooks/breast_ultrasound_performance_monitoring.ipynb` in Google Colab
-   (*File → Upload notebook*, or open it directly from GitHub).
+1. Click the **Open in Colab** button at the top of this page, or open
+   `notebooks/breast_ultrasound_performance_monitoring.ipynb` in Google Colab.
 2. Select **Runtime → Change runtime type → T4 GPU**.
 3. Run all cells from top to bottom. Allow access to Google Drive when asked.
 
-The notebook in this repository is saved **with the outputs of a complete run**, so the printed tables
-and figures can be viewed on GitHub without running anything.
+The notebook is saved without outputs; running it reproduces all tables and figures.
 
 Only cell 5 (feature extraction) needs a GPU; cells 6–9 run on CPU.
 
@@ -91,8 +90,8 @@ Only cell 5 (feature extraction) needs a GPU; cells 6–9 run on CPU.
 | 2 – download and unpack | a few minutes on the first run, about 1 minute afterwards |
 | 4 – manifest and duplicate detection | a few minutes |
 | 5 – embeddings (4 models) | about 5 minutes per model |
-| 6 – main experiment | about 10–20 minutes |
-| 7 – few-label and sample-size experiments | about 10–20 minutes |
+| 6 – main experiment | about 5–10 minutes |
+| 7 – few-label and sample-size experiments | about 25–30 minutes |
 | 8–9 – tables, figures and supplementary analyses | about 1 minute |
 
 ### Troubleshooting
@@ -144,7 +143,7 @@ All outputs are written to `MyDrive/bus_data/results/`.
 |---|---|
 | `T0_datasets.csv` | Images, groups and malignancy rate per dataset |
 | `T1_true_performance.csv` | Source vs. target performance for every deployment |
-| `T2_estimation_error.csv`, `T2b_*`, `T2c_*` | Label-free estimation error with 95% CIs and significance tests |
+| `T2_estimation_error.csv`, `T2c_*` | Label-free estimation error with 95% CIs and significance tests |
 | `T3_failure_detection.csv` | Detection of deployments with sensitivity below 0.85 |
 | `T4_model_selection.csv` | Label-free model selection |
 | `T5_prevalence_stress.csv`, `T5b_*` | Error under controlled prevalence shift; known cancer rate |
